@@ -4,22 +4,20 @@ import torch
 import torchaudio
 import tempfile
 import subprocess
-import json
 from pathlib import Path
 import sys
 import traceback
 import logging
 
-# Set up logging
+# Had to use logging to debug some issues, not removing it now tho. 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Add the encodec path to Python path
+# Add the encodec path from my system to Python path
 sys.path.append('/home/arteofejzo/Documents/MadTask/encodec')
 
 try:
     from encodec import EncodecModel
-    from encodec.utils import convert_audio
     logger.info("Successfully imported EnCodec modules")
 except ImportError as e:
     logger.error(f"Failed to import EnCodec: {e}")
