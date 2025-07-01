@@ -4,15 +4,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import torch
 import torchaudio
-import numpy as np
-import tempfile
-import os
 from pathlib import Path
 import sys
 from typing import List, Dict, Any, Optional
 import logging
 
-# Set up logging
+# Set up logging again
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -110,6 +107,7 @@ async def decode_audio(data: EncodedData):
         logger.error(f"Decode error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Endpoint to download decoded audio files
 @app.get("/download/{filename}")
 async def download_file(filename: str):
     file_path = DECODED_FILES_DIR / filename
@@ -122,6 +120,7 @@ async def download_file(filename: str):
         media_type='audio/wav'
     )
 
+# List all decoded audio files
 @app.get("/files")
 async def list_files():
     """List all decoded audio files"""
@@ -135,6 +134,7 @@ async def list_files():
         })
     return {"files": files}
 
+# Check if server is running
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}

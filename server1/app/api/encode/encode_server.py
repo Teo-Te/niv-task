@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 from pathlib import Path
 import sys
+# needed the error trace too ...
 import traceback
 import logging
 

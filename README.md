@@ -43,23 +43,15 @@ a little different compared to the original one but the sound is seems identical
 
 ### On the other server: Create a post route to receive input (YES)
 
-- FastAPI endpoint /decode
-
 ### Read the input (8xN matrix encodec) (YES)
-
-- JSON data is received and it is reconstructed with EnCodec
 
 ### Decode it with encodec (YES)
 
-- Via the EnCodec model it is decoded back to the audio
-
 ### Save as 22050Hz wav (YES)
-
-- Resampling from 24kHz to 22050Hz and saved as .wav
 
 ## Special Notes
 
-I did do this task cause that is what was given to me to prove what myself.
+I did do this task cause that is what was given to me to prove myself a little.
 I know I do not know much about audios and how does the AI world in itself work,
 and yes ofc, **THIS** should be what I was supposed to learn at the internship
 not doing WordPress to be honest. Thanks anyways.
