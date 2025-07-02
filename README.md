@@ -33,11 +33,7 @@ compress an audio file and then reconstruct it again.
 
 ### Convert audio to 24kHz waveform using ffmpeg (YES)
 
-### Encode with EnCodec (use ONNX Runtime javascript) (NO)
-
-I used PyTorch not ONNX, I took a look at ONNX but it seems a little complicated,
-i might give it a try later on. If taken a look at the waves on audacity, they are
-a little different compared to the original one but the sound is seems identical.
+### Encode with EnCodec (use ONNX Runtime javascript) (YES)
 
 ### Send it to another server (YES)
 
