@@ -45,6 +45,7 @@ next-env.d.ts
 
 # decode_audio folder
 /decode_audio
+/chunk-audio-version
 
 # wav audio files
 *.wav

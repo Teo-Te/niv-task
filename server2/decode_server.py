@@ -7,21 +7,13 @@ import torchaudio
 from pathlib import Path
 import sys
 from typing import List, Dict, Any, Optional
-import logging
 
-# Set up logging again
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Add the encodec path to Python path
 sys.path.append('/home/arteofejzo/Documents/MadTask/encodec')
 
 from encodec import EncodecModel
-from encodec.utils import save_audio
 
 app = FastAPI()
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,11 +22,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load EnCodec model
 model = EncodecModel.encodec_model_24khz()
 model.set_target_bandwidth(6.0)
 
-# Create a directory for decoded files
 DECODED_FILES_DIR = Path("/home/arteofejzo/Documents/MadTask/decoded_audio")
 DECODED_FILES_DIR.mkdir(exist_ok=True)
 
@@ -46,68 +36,82 @@ class EncodedData(BaseModel):
 @app.post("/decode")
 async def decode_audio(data: EncodedData):
     try:
-        logger.info(f"Received {len(data.encoded_data)} encoded frames")
+        # Get the client-encoded chunks
+        frame_data = data.encoded_data[0]
+        chunks = frame_data['chunks']
         
-        # Reconstruct encoded frames
+        # Process each chunk
         frames = []
-        for i, frame_data in enumerate(data.encoded_data):
-            codes = torch.tensor(frame_data['codes'], dtype=torch.int)
-            scale = torch.tensor([frame_data['scale']], dtype=torch.float32) if frame_data['scale'] is not None else None
-            logger.info(f"Frame {i}: codes_shape={codes.shape}, scale={scale}")
-            frames.append((codes, scale))
-
-        # Decode with EnCodec
-        logger.info("Decoding with EnCodec...")
+        for chunk in chunks:
+            codes_flat = chunk['codes']
+            scale_value = chunk['scale']
+            structure = chunk['structure']
+            
+            n_q = int(structure['n_q'])
+            channels = int(structure['channels'])
+            time_steps = int(structure['time_steps'])
+            
+            # Reshape codes
+            codes_tensor = torch.tensor(codes_flat, dtype=torch.float32).round().long()
+            codes_reshaped = codes_tensor.view(n_q, channels, time_steps)
+            codes_reshaped = torch.clamp(codes_reshaped, 0, 1023)
+            
+            scale_tensor = torch.tensor([scale_value], dtype=torch.float32)
+            frames.append((codes_reshaped, scale_tensor))
+        
+        # Decode each frame and concatenate
+        decoded_chunks = []
         with torch.no_grad():
-            decoded_wav = model.decode(frames)
+            for frame in frames:
+                decoded_chunk = model.decode([frame])
+                decoded_chunks.append(decoded_chunk)
         
-        logger.info(f"Decoded audio shape: {decoded_wav.shape}")
+        # Concatenate all chunks
+        decoded_wav = torch.cat(decoded_chunks, dim=-1)
         
-        # Remove batch dimension and ensure mono
+        # Remove batch dimension
         if decoded_wav.dim() == 3:
-            decoded_wav = decoded_wav.squeeze(0)  # Remove batch dim
-        if decoded_wav.shape[0] > 1:
-            decoded_wav = decoded_wav.mean(dim=0, keepdim=True)  # Convert to mono
+            decoded_wav = decoded_wav.squeeze(0)
+        
+        # Convert to mono if needed
+        if decoded_wav.dim() == 2 and decoded_wav.shape[0] > 1:
+            decoded_wav = decoded_wav.mean(dim=0, keepdim=True)
+        elif decoded_wav.dim() == 1:
+            decoded_wav = decoded_wav.unsqueeze(0)
 
-        # Generate unique filename
+        # Generate filename
         import time
         filename = f"decoded_audio_{int(time.time())}.wav"
         output_path = DECODED_FILES_DIR / filename
 
-        # Convert to 22050 Hz as requested
+        # Resample to 22050 Hz
         target_sr = 22050
         current_sr = model.sample_rate
         
         if current_sr != target_sr:
-            logger.info(f"Resampling from {current_sr}Hz to {target_sr}Hz")
             resampler = torchaudio.transforms.Resample(current_sr, target_sr)
             decoded_wav = resampler(decoded_wav)
 
-        # Normalize audio to prevent clipping
+        # Normalize
         max_val = decoded_wav.abs().max()
         if max_val > 0:
-            decoded_wav = decoded_wav / max_val * 0.9  # Scale to 90% to prevent clipping
+            decoded_wav = decoded_wav / max_val * 0.9
 
-        logger.info(f"Final audio shape: {decoded_wav.shape}, max_val: {decoded_wav.abs().max()}")
-
-        # Save the decoded audio
+        # Save
         torchaudio.save(str(output_path), decoded_wav, target_sr)
-        logger.info(f"Saved decoded audio to: {output_path}")
 
         return {
             "status": "success",
-            "message": f"Audio decoded and saved successfully",
+            "message": f"Audio decoded successfully from {len(frames)} chunks",
             "filename": filename,
             "download_url": f"http://localhost:8001/download/{filename}",
-            "output_path": str(output_path),
-            "sample_rate": target_sr
+            "sample_rate": target_sr,
+            "total_chunks": len(frames)
         }
 
     except Exception as e:
-        logger.error(f"Decode error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Endpoint to download decoded audio files
 @app.get("/download/{filename}")
 async def download_file(filename: str):
     file_path = DECODED_FILES_DIR / filename
@@ -120,24 +124,9 @@ async def download_file(filename: str):
         media_type='audio/wav'
     )
 
-# List all decoded audio files
-@app.get("/files")
-async def list_files():
-    """List all decoded audio files"""
-    files = []
-    for file_path in DECODED_FILES_DIR.glob("*.wav"):
-        files.append({
-            "filename": file_path.name,
-            "download_url": f"http://localhost:8001/download/{file_path.name}",
-            "size": file_path.stat().st_size,
-            "created": file_path.stat().st_mtime
-        })
-    return {"files": files}
-
-# Check if server is running
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    return {"status": "healthy", "service": "decode_server"}
 
 if __name__ == "__main__":
     import uvicorn

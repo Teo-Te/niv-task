@@ -1,32 +1,16 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 import torch
-import torchaudio
-import tempfile
-import subprocess
 from pathlib import Path
 import sys
-# needed the error trace too ...
-import traceback
-import logging
 
-# Had to use logging to debug some issues, not removing it now tho. 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Add the encodec path from my system to Python path
 sys.path.append('/home/arteofejzo/Documents/MadTask/encodec')
 
-try:
-    from encodec import EncodecModel
-    logger.info("Successfully imported EnCodec modules")
-except ImportError as e:
-    logger.error(f"Failed to import EnCodec: {e}")
-    raise
+from encodec import EncodecModel
 
 app = FastAPI()
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,105 +19,90 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load EnCodec model
-try:
-    logger.info("Loading EnCodec model...")
-    model = EncodecModel.encodec_model_24khz()
-    model.set_target_bandwidth(6.0)
-    logger.info("EnCodec model loaded successfully")
-except Exception as e:
-    logger.error(f"Failed to load EnCodec model: {e}")
-    raise
+model = EncodecModel.encodec_model_24khz()
+model.set_target_bandwidth(6.0)
 
-def convert_to_24khz_with_ffmpeg(input_path, output_path):
-    """Convert audio to 24kHz mono using FFmpeg"""
+@app.post("/convert-to-onnx")
+async def convert_model_to_onnx():
     try:
-        cmd = [
-            'ffmpeg', '-i', input_path,
-            '-ar', '24000',  # Sample rate 24kHz
-            '-ac', '1',      # Mono
-            '-y',            # Overwrite output
-            output_path
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise Exception(f"FFmpeg error: {result.stderr}")
-        logger.info(f"Converted audio to 24kHz: {output_path}")
-        return True
-    except Exception as e:
-        logger.error(f"FFmpeg conversion failed: {e}")
-        return False
-
-@app.post("/encode")
-async def encode_audio(audio: UploadFile = File(...)):
-    tmp_file_path = None
-    converted_file_path = None
-    try:
-        logger.info(f"Received audio file: {audio.filename}, content_type: {audio.content_type}")
+        onnx_path = Path("./models/encodec_encoder.onnx")
+        onnx_path.parent.mkdir(exist_ok=True)
         
-        # Save uploaded file temporarily
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as tmp_file:
-            content = await audio.read()
-            tmp_file.write(content)
-            tmp_file_path = tmp_file.name
-            logger.info(f"Saved temporary file: {tmp_file_path}")
-
-        # Convert to 24kHz using FFmpeg
-        converted_file_path = tmp_file_path.replace('.wav', '_24khz.wav')
-        if not convert_to_24khz_with_ffmpeg(tmp_file_path, converted_file_path):
-            raise HTTPException(status_code=500, detail="Failed to convert audio to 24kHz")
-
-        # Load the converted audio
-        logger.info("Loading converted audio file...")
-        wav, sr = torchaudio.load(converted_file_path)
-        logger.info(f"Loaded audio: shape={wav.shape}, sample_rate={sr}")
-        
-        # Ensure correct format for EnCodec
-        if wav.dim() == 1:
-            wav = wav.unsqueeze(0)  # Add channel dimension
-        if wav.shape[0] > 1:
-            wav = wav.mean(dim=0, keepdim=True)  # Convert to mono
-        
-        # Add batch dimension
-        wav = wav.unsqueeze(0)
-        logger.info(f"Preprocessed audio: shape={wav.shape}")
-
-        # Encode with EnCodec
-        logger.info("Encoding with EnCodec...")
-        with torch.no_grad():
-            encoded_frames = model.encode(wav)
-        logger.info(f"Encoded {len(encoded_frames)} frames")
-        
-        # Convert to serializable format
-        logger.info("Converting to serializable format...")
-        encoded_data = []
-        for i, (codes, scale) in enumerate(encoded_frames):
-            logger.info(f"Frame {i}: codes_shape={codes.shape}, scale={scale}")
-            frame_data = {
-                'codes': codes.cpu().numpy().tolist(),
-                'scale': scale.cpu().item() if scale is not None else None
+        if onnx_path.exists():
+            return {
+                "status": "success", 
+                "message": "ONNX model already exists",
+                "model_size_mb": onnx_path.stat().st_size / 1024 / 1024
             }
-            encoded_data.append(frame_data)
-
-        logger.info("Encoding completed successfully")
+        
+        class EnCodecSimpleWrapper(torch.nn.Module):
+            def __init__(self, encodec_model):
+                super().__init__()
+                self.encodec_model = encodec_model
+            
+            def forward(self, x):
+                with torch.no_grad():
+                    encoded_frames = self.encodec_model.encode(x)
+                    codes, scale = encoded_frames[0]
+                    
+                    codes_flat = codes.flatten().float()
+                    scale_out = scale.float() if scale is not None else torch.ones(1, dtype=torch.float32, device=codes.device)
+                    
+                    n_q = torch.tensor(codes.shape[0], dtype=torch.float32)
+                    channels = torch.tensor(codes.shape[1], dtype=torch.float32)
+                    time_steps = torch.tensor(codes.shape[2], dtype=torch.float32)
+                    
+                    return codes_flat, scale_out, n_q, channels, time_steps
+        
+        wrapper = EnCodecSimpleWrapper(model)
+        wrapper.eval()
+        
+        chunk_size = 45000
+        dummy_input = torch.randn(1, 1, chunk_size)
+        
+        torch.onnx.export(
+            wrapper,
+            dummy_input,
+            str(onnx_path),
+            export_params=True,
+            opset_version=11,
+            do_constant_folding=True,
+            input_names=['audio'],
+            output_names=['codes', 'scale', 'n_q', 'channels', 'time_steps'],
+            verbose=False
+        )
+        
+        model_size_mb = onnx_path.stat().st_size / 1024 / 1024
+        
         return {
             "status": "success",
-            "encoded_data": encoded_data,
-            "sample_rate": 24000,
-            "channels": 1
+            "message": "EnCodec encoder converted to ONNX successfully",
+            "model_size_mb": model_size_mb,
+            "chunk_size": chunk_size
         }
-
+        
     except Exception as e:
-        logger.error(f"Error during encoding: {str(e)}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Encoding failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/get-onnx-model")
+async def get_onnx_model():
+    onnx_path = Path("./models/encodec_encoder.onnx")
+    if onnx_path.exists():
+        return {"status": "exists", "path": str(onnx_path)}
+    else:
+        raise HTTPException(status_code=404, detail="ONNX model not found")
+
+@app.get("/model/encodec_encoder.onnx")
+async def serve_onnx_model():
+    onnx_path = Path("./models/encodec_encoder.onnx")
+    if not onnx_path.exists():
+        raise HTTPException(status_code=404, detail="ONNX model not found")
     
-    finally:
-        # Clean up temp files
-        for file_path in [tmp_file_path, converted_file_path]:
-            if file_path and Path(file_path).exists():
-                Path(file_path).unlink()
-                logger.info(f"Cleaned up: {file_path}")
+    return FileResponse(
+        path=str(onnx_path),
+        filename="encodec_encoder.onnx",
+        media_type="application/octet-stream"
+    )
 
 @app.get("/health")
 async def health_check():
@@ -141,4 +110,4 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
