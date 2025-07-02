@@ -21,6 +21,7 @@ app.add_middleware(
 
 # It had two models, as per the task, I used the 24kHz model
 model = EncodecModel.encodec_model_24khz()
+
 # To my understanding, this determines the quality of the audio encoding
 # there were these options: 1.5, 3, 6, 12 or 24 kbps
 model.set_target_bandwidth(6.0)
