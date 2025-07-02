@@ -5,8 +5,8 @@ import torch
 from pathlib import Path
 import sys
 
+# Appending EnCodec so as to get the model
 sys.path.append('/home/arteofejzo/Documents/MadTask/encodec')
-
 from encodec import EncodecModel
 
 app = FastAPI()
@@ -19,22 +19,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# It had two models, as per the task, I used the 24kHz model
 model = EncodecModel.encodec_model_24khz()
+# To my understanding, this determines the quality of the audio encoding
+# there were these options: 1.5, 3, 6, 12 or 24 kbps
 model.set_target_bandwidth(6.0)
 
 @app.post("/convert-to-onnx")
 async def convert_model_to_onnx():
     try:
+        # Set the path within the App directory of next.js for the model to be stored
         onnx_path = Path("./models/encodec_encoder.onnx")
         onnx_path.parent.mkdir(exist_ok=True)
         
+        # If the model has been converted before, Then simply skip it and return success
         if onnx_path.exists():
             return {
                 "status": "success", 
                 "message": "ONNX model already exists",
-                "model_size_mb": onnx_path.stat().st_size / 1024 / 1024
             }
-        
+        # This class is a wrapper around the EnCodec model to simplify the ONNX export
+        # EnCodec has a lot nested objects and this just flattens them out.
         class EnCodecSimpleWrapper(torch.nn.Module):
             def __init__(self, encodec_model):
                 super().__init__()

@@ -30,7 +30,11 @@ DECODED_FILES_DIR.mkdir(exist_ok=True)
 
 class EncodedData(BaseModel):
     encoded_data: List[Dict[str, Any]]
+    # EnCodec support 24kHz
     sample_rate: Optional[int] = 24000
+    # EnCodec support both mono and stereo audio
+    # It was not specified in the task requirements, so I have forced mono everywhere
+    # Tho, might take a look at it later, or no, think I have done enough.
     channels: Optional[int] = 1
 
 @app.post("/decode")
@@ -73,7 +77,8 @@ async def decode_audio(data: EncodedData):
         if decoded_wav.dim() == 3:
             decoded_wav = decoded_wav.squeeze(0)
         
-        # Convert to mono if needed
+        # Convert to mono if it is sent as 2 channels from the browser
+        # I have forced mono there but, just to keep it safe
         if decoded_wav.dim() == 2 and decoded_wav.shape[0] > 1:
             decoded_wav = decoded_wav.mean(dim=0, keepdim=True)
         elif decoded_wav.dim() == 1:

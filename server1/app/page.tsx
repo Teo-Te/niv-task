@@ -129,10 +129,8 @@ export default function Page() {
         body: JSON.stringify({
           encoded_data: [
             {
-              encoding_method: "onnx_runtime_web_chunks_client",
               chunks: allEncodedChunks,
               num_chunks: numChunks,
-              client_encoded: true,
             },
           ],
           sample_rate: 24000,
